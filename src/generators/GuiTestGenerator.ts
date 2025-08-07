@@ -83,7 +83,7 @@ export class GuiTestGenerator {
   }
 
   private async extractPageInformation(page: Page): Promise<any> {
-    const pageInfo = {
+    const pageInfo: any = {
       title: await page.title(),
       url: page.url(),
       elements: [],
@@ -96,7 +96,7 @@ export class GuiTestGenerator {
     try {
       // Extract interactive elements
       const elements = await page.evaluate(() => {
-        const result = {
+        const result: any = {
           forms: [],
           links: [],
           buttons: [],
@@ -105,30 +105,38 @@ export class GuiTestGenerator {
 
         // Forms
         document.querySelectorAll("form").forEach((form, index) => {
+          const formElement = form as HTMLFormElement;
           result.forms.push({
             index,
-            action: form.action,
-            method: form.method,
+            action: formElement.action,
+            method: formElement.method,
             inputs: Array.from(
-              form.querySelectorAll("input, select, textarea")
-            ).map((input) => ({
-              type: input.type || input.tagName.toLowerCase(),
-              name: input.name,
-              id: input.id,
-              placeholder: input.placeholder,
-              required: input.hasAttribute("required"),
-            })),
+              formElement.querySelectorAll("input, select, textarea")
+            ).map((input) => {
+              const inputElement = input as
+                | HTMLInputElement
+                | HTMLSelectElement
+                | HTMLTextAreaElement;
+              return {
+                type: inputElement.type || inputElement.tagName.toLowerCase(),
+                name: inputElement.name,
+                id: inputElement.id,
+                placeholder: (inputElement as any).placeholder || "",
+                required: inputElement.hasAttribute("required"),
+              };
+            }),
           });
         });
 
         // Links
         document.querySelectorAll("a[href]").forEach((link, index) => {
+          const linkElement = link as HTMLAnchorElement;
           result.links.push({
             index,
-            href: link.href,
-            text: link.textContent?.trim(),
-            id: link.id,
-            className: link.className,
+            href: linkElement.href,
+            text: linkElement.textContent?.trim(),
+            id: linkElement.id,
+            className: linkElement.className,
           });
         });
 
@@ -138,12 +146,15 @@ export class GuiTestGenerator {
             'button, input[type="submit"], input[type="button"]'
           )
           .forEach((button, index) => {
+            const buttonElement = button as
+              | HTMLButtonElement
+              | HTMLInputElement;
             result.buttons.push({
               index,
-              text: button.textContent?.trim() || button.value,
-              id: button.id,
-              className: button.className,
-              type: button.type,
+              text: buttonElement.textContent?.trim() || buttonElement.value,
+              id: buttonElement.id,
+              className: buttonElement.className,
+              type: buttonElement.type,
             });
           });
 
@@ -151,14 +162,18 @@ export class GuiTestGenerator {
         document
           .querySelectorAll("input, select, textarea")
           .forEach((input, index) => {
+            const inputElement = input as
+              | HTMLInputElement
+              | HTMLSelectElement
+              | HTMLTextAreaElement;
             result.inputs.push({
               index,
-              type: input.type || input.tagName.toLowerCase(),
-              name: input.name,
-              id: input.id,
-              placeholder: input.placeholder,
-              value: input.value,
-              required: input.hasAttribute("required"),
+              type: inputElement.type || inputElement.tagName.toLowerCase(),
+              name: inputElement.name,
+              id: inputElement.id,
+              placeholder: (inputElement as HTMLInputElement).placeholder || "",
+              value: inputElement.value,
+              required: inputElement.hasAttribute("required"),
             });
           });
 

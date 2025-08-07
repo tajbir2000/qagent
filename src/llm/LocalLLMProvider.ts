@@ -1,5 +1,6 @@
 // src/llm/LocalLLMProvider.ts
 import { spawn } from "child_process";
+import { LLMOptions, LLMProvider } from "./LLMProvider";
 
 export interface LocalLLMConfig {
   modelPath: string;

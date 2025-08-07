@@ -250,8 +250,8 @@ export class TestRunner {
       case "select":
         if (step.selector && step.value) {
           if (step.value === "first") {
-            const options = await page.$(step.selector + " option");
-            if (options.length > 1) {
+            const options = await page.$$(step.selector + " option");
+            if (options && options.length > 1) {
               const value = await options[1].getAttribute("value");
               if (value) {
                 await page.selectOption(step.selector, value);
@@ -505,7 +505,7 @@ export class TestRunner {
         response: {
           status: response.status,
           statusText: response.statusText,
-          headers: Object.fromEntries(response.headers.entries()),
+          headers: Object.fromEntries(response.headers as any),
           body: responseData,
           responseTime,
         },

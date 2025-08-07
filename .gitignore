@@ -1,0 +1,11 @@
+.env
+/.vscode
+/node_modules
+/dist
+/build
+/tests
+/models
+/logs
+/reports
+/docs
+/.qodo

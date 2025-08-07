@@ -1,0 +1,155 @@
+{
+  "id": "ecommerce-checkout",
+  "title": "E-commerce Checkout Flow",
+  "description": "Complete user journey from product selection to order completion",
+  "steps": [
+    {
+      "id": "step-1",
+      "action": "Navigate to product page",
+      "element": "product-link",
+      "expected": "Product page loads with details",
+      "apiCalls": ["GET /api/products/{id}"]
+    },
+    {
+      "id": "step-2",
+      "action": "Add product to cart",
+      "element": "add-to-cart-button",
+      "input": "quantity: 1",
+      "expected": "Product added to cart successfully",
+      "apiCalls": ["POST /api/cart/add"]
+    },
+    {
+      "id": "step-3",
+      "action": "Navigate to cart",
+      "element": "cart-link",
+      "expected": "Cart page shows added product",
+      "apiCalls": ["GET /api/cart"]
+    },
+    {
+      "id": "step-4",
+      "action": "Proceed to checkout",
+      "element": "checkout-button",
+      "expected": "Checkout form is displayed",
+      "apiCalls": ["GET /api/checkout/init"]
+    },
+    {
+      "id": "step-5",
+      "action": "Fill billing information",
+      "element": "billing-form",
+      "input": {
+        "firstName": "John",
+        "lastName": "Doe",
+        "email": "john@example.com",
+        "address": "123 Main St",
+        "city": "New York",
+        "zip": "10001"
+      },
+      "expected": "Billing information accepted",
+      "apiCalls": ["POST /api/checkout/billing"]
+    },
+    {
+      "id": "step-6",
+      "action": "Submit payment",
+      "element": "submit-payment-button",
+      "input": {
+        "cardNumber": "4111111111111111",
+        "expiryDate": "12/25",
+        "cvv": "123"
+      },
+      "expected": "Payment processed and order confirmed",
+      "apiCalls": ["POST /api/payment/process", "POST /api/orders/create"]
+    }
+  ],
+  "apiEndpoints": [
+    {
+      "method": "GET",
+      "path": "/api/products/{id}",
+      "description": "Fetch product details",
+      "expectedResponse": {
+        "id": "string",
+        "name": "string",
+        "price": "number",
+        "description": "string",
+        "inStock": "boolean"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/cart/add",
+      "description": "Add product to cart",
+      "requestBody": {
+        "productId": "string",
+        "quantity": "number"
+      },
+      "expectedResponse": {
+        "success": "boolean",
+        "cartTotal": "number"
+      }
+    },
+    {
+      "method": "GET",
+      "path": "/api/cart",
+      "description": "Get cart contents",
+      "expectedResponse": {
+        "items": "array",
+        "total": "number",
+        "itemCount": "number"
+      }
+    },
+    {
+      "method": "POST",
+      "path": "/api/payment/process",
+      "description": "Process payment",
+      "requestBody": {
+        "amount": "number",
+        "cardToken": "string",
+        "billingAddress": "object"
+      },
+      "expectedResponse": {
+        "success": "boolean",
+        "transactionId": "string"
+      }
+    }
+  ],
+  "testScenarios": [
+    {
+      "name": "Happy Path Checkout",
+      "type": "happy_path",
+      "steps": [
+        "Navigate to product page",
+        "Add product to cart",
+        "Complete checkout process",
+        "Verify order confirmation"
+      ],
+      "assertions": [
+        "Product is added to cart",
+        "Payment is processed successfully",
+        "Order confirmation is displayed",
+        "Thank you email is sent"
+      ]
+    },
+    {
+      "name": "Invalid Payment Information",
+      "type": "error_handling",
+      "steps": [
+        "Navigate to checkout",
+        "Enter invalid credit card",
+        "Submit payment"
+      ],
+      "assertions": [
+        "Payment error is displayed",
+        "User remains on payment page",
+        "Cart contents are preserved"
+      ]
+    },
+    {
+      "name": "Out of Stock Product",
+      "type": "edge_case",
+      "steps": ["Navigate to out-of-stock product", "Attempt to add to cart"],
+      "assertions": [
+        "Add to cart button is disabled",
+        "Out of stock message is shown"
+      ]
+    }
+  ]
+}

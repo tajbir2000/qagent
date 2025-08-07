@@ -1,0 +1,26 @@
+{
+  "name": "autoqagent",
+  "version": "0.1.0",
+  "scripts": {
+    "start": "ts-node src/main.ts",
+    "generate": "ts-node src/main.ts generate",
+    "run-tests": "ts-node src/main.ts run",
+    "full-test": "ts-node src/main.ts full",
+    "build": "tsc",
+    "dev": "ts-node --watch src/main.ts",
+    "test:gui": "ts-node src/main.ts run --type=gui",
+    "test:api": "ts-node src/main.ts run --type=api",
+    "generate:from-journey": "ts-node src/main.ts generate --journey=examples/user-journey.json",
+    "generate:from-url": "ts-node src/main.ts generate --url=https://example.com",
+    "full:ecommerce": "ts-node src/main.ts full --journey=examples/user-journey.json --api=examples/api-spec.json"
+  },
+  "dependencies": {
+    "openai": "^4.0.0",
+    "playwright": "^1.42.0",
+    "dotenv": "^16.3.1"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.1",
+    "typescript": "^5.2.2"
+  }
+}

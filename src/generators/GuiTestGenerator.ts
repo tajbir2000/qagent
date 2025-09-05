@@ -2,22 +2,34 @@
 import { Browser, chromium, Page } from "playwright";
 import { LLMProvider } from "../llm/LLMProvider";
 import { UserJourney } from "../parsers/JourneyParser";
+import { PromptTemplates, PromptContext } from "../prompts/PromptTemplates";
 
 export interface GuiTestOptions {
   appUrl: string;
   userJourney?: UserJourney;
   viewport?: { width: number; height: number };
   timeout?: number;
+  complexity?: 'basic' | 'intermediate' | 'advanced';
+  testCategories?: string[];
+  maxTestCases?: number;
 }
 
 export interface GuiTestCase {
   id: string;
   name: string;
   description: string;
+  category: string;
+  priority: "critical" | "high" | "medium" | "low";
+  estimatedDuration: string;
+  tags: string[];
+  prerequisites?: string[];
+  testData?: {
+    inputs?: Record<string, any>;
+    expectedOutputs?: Record<string, any>;
+  };
   steps: PlaywrightStep[];
   assertions: Assertion[];
-  tags: string[];
-  priority: "high" | "medium" | "low";
+  cleanup?: PlaywrightStep[];
 }
 
 export interface PlaywrightStep {
@@ -29,18 +41,32 @@ export interface PlaywrightStep {
     | "hover"
     | "wait"
     | "screenshot"
-    | "scroll";
+    | "scroll"
+    | "press"
+    | "type"
+    | "check"
+    | "uncheck";
   selector?: string;
   value?: string;
-  options?: any;
+  options?: {
+    timeout?: number;
+    force?: boolean;
+    trial?: boolean;
+    strict?: boolean;
+  };
   description: string;
+  waitFor?: "networkidle" | "domcontentloaded" | "load" | "element";
+  retry?: boolean;
 }
 
 export interface Assertion {
-  type: "visible" | "text" | "value" | "url" | "count" | "attribute";
+  type: "visible" | "text" | "value" | "url" | "count" | "attribute" | "style" | "screenshot";
   selector?: string;
   expected: any;
   description: string;
+  timeout?: number;
+  retry?: boolean;
+  operator?: "equals" | "contains" | "matches" | "exists" | "greater" | "less";
 }
 
 export class GuiTestGenerator {
@@ -199,61 +225,174 @@ export class GuiTestGenerator {
     pageInfo: any,
     options: GuiTestOptions
   ): Promise<GuiTestCase[]> {
-    const prompt = `
-Analyze this web page and generate comprehensive GUI test cases using Playwright.
-
-Page Information:
-${JSON.stringify(pageInfo, null, 2)}
-
-${
-  options.userJourney
-    ? `User Journey Context:
-${JSON.stringify(options.userJourney, null, 2)}`
-    : ""
-}
-
-Generate test cases that cover:
-1. Basic functionality (forms, navigation, interactions)
-2. User journey flows (if provided)
-3. Edge cases (empty forms, invalid inputs, boundary conditions)
-4. Accessibility testing (keyboard navigation, screen reader support)
-5. Responsive design testing
-6. Error handling scenarios
-
-For each test case, provide:
-- Unique ID and descriptive name
-- Step-by-step Playwright actions
-- Assertions to verify expected behavior
-- Priority level (high/medium/low)
-- Relevant tags
-
-Use these Playwright action types:
-- goto: Navigate to URL
-- click: Click on element
-- fill: Fill input field
-- select: Select dropdown option
-- hover: Hover over element
-- wait: Wait for element or condition
-- screenshot: Take screenshot
-- scroll: Scroll to element
-
-Assertion types:
-- visible: Check if element is visible
-- text: Check element text content
-- value: Check input value
-- url: Check current URL
-- count: Check element count
-- attribute: Check element attribute
-
-Please provide a JSON array of test cases:`;
-
     try {
+      console.log("🔍 Generating GUI test cases with enhanced prompts...");
+      
+      // Create context for prompt generation
+      const context: PromptContext = {
+        pageInfo,
+        userJourney: options.userJourney,
+        testType: 'gui',
+        complexity: options.complexity || 'intermediate',
+        focus: options.testCategories
+      };
+
+      // Generate enhanced prompt
+      const prompt = PromptTemplates.generateGuiTestPrompt(context);
+      
+      console.log(`📝 Using ${context.complexity} complexity level`);
+      console.log(`🎯 Focus areas: ${options.testCategories?.join(', ') || 'all categories'}`);
+      
+      // Generate test cases using enhanced prompt
       const testCases = await this.llmProvider.generateJSON(prompt);
-      return Array.isArray(testCases) ? testCases : [];
+      
+      if (!Array.isArray(testCases)) {
+        console.warn("LLM returned non-array response, using fallback");
+        return this.generateFallbackTests(pageInfo, options);
+      }
+
+      // Validate and enhance generated test cases
+      const validatedTests = this.validateAndEnhanceTestCases(testCases, options);
+      
+      console.log(`✨ Generated ${validatedTests.length} enhanced GUI test cases`);
+      return validatedTests;
+      
     } catch (error) {
-      console.error("Failed to generate GUI test cases:", error);
+      console.error("Failed to generate enhanced GUI test cases:", error);
       return this.generateFallbackTests(pageInfo, options);
     }
+  }
+
+  private validateAndEnhanceTestCases(testCases: any[], options: GuiTestOptions): GuiTestCase[] {
+    const validated: GuiTestCase[] = [];
+    const maxTests = options.maxTestCases || 25;
+
+    for (let i = 0; i < testCases.length && validated.length < maxTests; i++) {
+      const testCase = testCases[i];
+      
+      // Validate required fields
+      if (!testCase.id || !testCase.name || !testCase.steps || !Array.isArray(testCase.steps)) {
+        console.warn(`Skipping invalid test case: ${testCase.name || 'unnamed'}`);
+        continue;
+      }
+
+      // Enhance test case with defaults and validation
+      const enhancedTest: GuiTestCase = {
+        id: this.ensureUniqueId(testCase.id, validated),
+        name: testCase.name,
+        description: testCase.description || `Test case for ${testCase.name}`,
+        category: testCase.category || 'functional',
+        priority: this.validatePriority(testCase.priority),
+        estimatedDuration: testCase.estimatedDuration || '1m',
+        tags: Array.isArray(testCase.tags) ? testCase.tags : ['automated'],
+        prerequisites: testCase.prerequisites || [],
+        testData: testCase.testData || {},
+        steps: this.validateSteps(testCase.steps, options.appUrl),
+        assertions: this.validateAssertions(testCase.assertions || []),
+        cleanup: testCase.cleanup || []
+      };
+
+      // Add URL navigation if missing
+      if (!enhancedTest.steps.some(step => step.action === 'goto')) {
+        enhancedTest.steps.unshift({
+          action: 'goto',
+          value: options.appUrl,
+          description: 'Navigate to application',
+          waitFor: 'networkidle'
+        });
+      }
+
+      validated.push(enhancedTest);
+    }
+
+    return this.prioritizeTestCases(validated);
+  }
+
+  private ensureUniqueId(id: string, existingTests: GuiTestCase[]): string {
+    let uniqueId = id;
+    let counter = 1;
+    
+    while (existingTests.some(test => test.id === uniqueId)) {
+      uniqueId = `${id}-${counter}`;
+      counter++;
+    }
+    
+    return uniqueId;
+  }
+
+  private validatePriority(priority: any): "critical" | "high" | "medium" | "low" {
+    if (['critical', 'high', 'medium', 'low'].includes(priority)) {
+      return priority;
+    }
+    return 'medium';
+  }
+
+  private validateSteps(steps: any[], appUrl: string): PlaywrightStep[] {
+    return steps.map((step, index) => {
+      const validStep: PlaywrightStep = {
+        action: this.validateAction(step.action),
+        selector: step.selector || undefined,
+        value: step.value || undefined,
+        description: step.description || `Step ${index + 1}`,
+        options: {
+          timeout: step.options?.timeout || 10000,
+          force: step.options?.force || false,
+          ...step.options
+        },
+        waitFor: step.waitFor || undefined,
+        retry: step.retry || false
+      };
+
+      // Add app URL for goto actions that don't have a value
+      if (validStep.action === 'goto' && !validStep.value) {
+        validStep.value = appUrl;
+      }
+
+      return validStep;
+    });
+  }
+
+  private validateAction(action: any): PlaywrightStep['action'] {
+    const validActions = ['goto', 'click', 'fill', 'select', 'hover', 'wait', 'screenshot', 'scroll', 'press', 'type', 'check', 'uncheck'];
+    return validActions.includes(action) ? action : 'click';
+  }
+
+  private validateAssertions(assertions: any[]): Assertion[] {
+    return assertions.map(assertion => ({
+      type: this.validateAssertionType(assertion.type),
+      selector: assertion.selector || undefined,
+      expected: assertion.expected,
+      description: assertion.description || 'Assertion validation',
+      timeout: assertion.timeout || 5000,
+      retry: assertion.retry || true,
+      operator: assertion.operator || 'equals'
+    }));
+  }
+
+  private validateAssertionType(type: any): Assertion['type'] {
+    const validTypes = ['visible', 'text', 'value', 'url', 'count', 'attribute', 'style', 'screenshot'];
+    return validTypes.includes(type) ? type : 'visible';
+  }
+
+  private prioritizeTestCases(testCases: GuiTestCase[]): GuiTestCase[] {
+    // Sort by priority: critical > high > medium > low
+    const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+    
+    return testCases.sort((a, b) => {
+      const priorityA = priorityOrder[a.priority];
+      const priorityB = priorityOrder[b.priority];
+      
+      if (priorityA !== priorityB) {
+        return priorityA - priorityB;
+      }
+      
+      // Secondary sort by category importance
+      const categoryOrder = { authentication: 0, form: 1, navigation: 2, error: 3, accessibility: 4 };
+      const categoryA = categoryOrder[a.category as keyof typeof categoryOrder] || 5;
+      const categoryB = categoryOrder[b.category as keyof typeof categoryOrder] || 5;
+      
+      return categoryA - categoryB;
+    });
   }
 
   private generateFallbackTests(
@@ -267,6 +406,10 @@ Please provide a JSON array of test cases:`;
       id: "gui-basic-load",
       name: "Basic Page Load",
       description: "Verify page loads correctly",
+      category: "smoke",
+      priority: "high",
+      estimatedDuration: "30s",
+      tags: ["basic", "smoke"],
       steps: [
         {
           action: "goto",
@@ -297,8 +440,6 @@ Please provide a JSON array of test cases:`;
           description: `Page title should be "${pageInfo.title}"`,
         },
       ],
-      tags: ["basic", "smoke"],
-      priority: "high",
     });
 
     // Form testing
@@ -308,6 +449,10 @@ Please provide a JSON array of test cases:`;
           id: `gui-form-${index}`,
           name: `Form ${index + 1} Validation`,
           description: `Test form validation and submission`,
+          category: "form",
+          priority: "high",
+          estimatedDuration: "45s",
+          tags: ["form", "validation"],
           steps: [
             {
               action: "goto",
@@ -321,8 +466,6 @@ Please provide a JSON array of test cases:`;
             },
           ],
           assertions: this.generateFormAssertions(form),
-          tags: ["form", "validation"],
-          priority: "high",
         });
       });
     }
@@ -335,6 +478,10 @@ Please provide a JSON array of test cases:`;
             id: `gui-button-${index}`,
             name: `Button Click - ${button.text}`,
             description: `Test clicking "${button.text}" button`,
+            category: "interaction",
+            priority: "medium",
+            estimatedDuration: "20s",
+            tags: ["interaction", "buttons"],
             steps: [
               {
                 action: "goto",
@@ -366,8 +513,6 @@ Please provide a JSON array of test cases:`;
                 description: "Page should remain accessible after button click",
               },
             ],
-            tags: ["interaction", "buttons"],
-            priority: "medium",
           });
         }
       });
@@ -386,6 +531,10 @@ Please provide a JSON array of test cases:`;
             id: `gui-link-${index}`,
             name: `Link Navigation - ${link.text}`,
             description: `Test navigation via "${link.text}" link`,
+            category: "navigation",
+            priority: "medium",
+            estimatedDuration: "25s",
+            tags: ["navigation", "links"],
             steps: [
               {
                 action: "goto",
@@ -416,8 +565,6 @@ Please provide a JSON array of test cases:`;
                 description: `Should navigate to ${link.href}`,
               },
             ],
-            tags: ["navigation", "links"],
-            priority: "medium",
           });
         }
       });

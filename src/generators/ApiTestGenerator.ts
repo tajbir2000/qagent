@@ -3,36 +3,59 @@ import fs from "fs/promises";
 import { chromium } from "playwright";
 import { LLMProvider } from "../llm/LLMProvider";
 import { UserJourney } from "../parsers/JourneyParser";
+import { PromptTemplates, PromptContext } from "../prompts/PromptTemplates";
 
 export interface ApiTestOptions {
   specFile?: string;
   userJourney?: UserJourney;
   discoveredAPIs?: DiscoveredAPI[];
   baseUrl?: string;
+  complexity?: 'basic' | 'intermediate' | 'advanced';
+  testCategories?: string[];
+  maxTestCases?: number;
+  includePerformanceTests?: boolean;
+  includeSecurityTests?: boolean;
 }
 
 export interface ApiTestCase {
   id: string;
   name: string;
   description: string;
+  category: string;
+  priority: "critical" | "high" | "medium" | "low";
+  estimatedDuration: string;
+  tags: string[];
+  prerequisites?: string[];
+  dependencies?: string[];
   method: string;
   endpoint: string;
+  baseUrl?: string;
   headers?: Record<string, string>;
   body?: any;
   queryParams?: Record<string, string>;
   expectedStatus: number;
+  expectedHeaders?: Record<string, string>;
   expectedResponse?: any;
   assertions: ApiAssertion[];
-  tags: string[];
-  priority: "high" | "medium" | "low";
-  dependencies?: string[];
+  dataSetup?: Record<string, ApiOperation>;
+  dataCleanup?: Record<string, ApiOperation>;
+  variableExtraction?: Record<string, string>;
+}
+
+export interface ApiOperation {
+  endpoint: string;
+  method: string;
+  body?: any;
+  headers?: Record<string, string>;
 }
 
 export interface ApiAssertion {
-  type: "status" | "header" | "body" | "schema" | "performance";
+  type: "status" | "header" | "body" | "schema" | "performance" | "security";
   path?: string;
+  operator?: "equals" | "contains" | "matches" | "exists" | "type" | "range" | "less" | "greater";
   expected: any;
   description: string;
+  timeout?: number;
 }
 
 export interface DiscoveredAPI {
@@ -67,14 +90,21 @@ export class ApiTestGenerator {
     console.log(`🔍 Discovering API endpoints from ${appUrl}...`);
 
     const discoveredAPIs: DiscoveredAPI[] = [];
+    let browser: any = null;
 
     try {
-      const browser = await chromium.launch({ headless: true });
+      browser = await chromium.launch({
+        headless: true,
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      });
       const context = await browser.newContext();
       const page = await context.newPage();
 
+      // Set longer timeout for page operations
+      page.setDefaultTimeout(30000);
+
       // Intercept network requests
-      page.on("request", (request) => {
+      page.on("request", (request: any) => {
         const url = request.url();
         if (this.isApiRequest(url, request.method())) {
           // Store request info
@@ -97,7 +127,7 @@ export class ApiTestGenerator {
         }
       });
 
-      page.on("response", (response) => {
+      page.on("response", (response: any) => {
         const request = response.request();
         const url = request.url();
 
@@ -111,13 +141,13 @@ export class ApiTestGenerator {
             apiCall.status = response.status();
             response
               .json()
-              .then((data) => {
+              .then((data: any) => {
                 apiCall.response = data;
               })
               .catch(() => {
                 response
                   .text()
-                  .then((text) => {
+                  .then((text: any) => {
                     apiCall.response = text;
                   })
                   .catch(() => {});
@@ -127,13 +157,16 @@ export class ApiTestGenerator {
       });
 
       // Navigate to the application and interact with it
-      await page.goto(appUrl);
-      await page.waitForLoadState("networkidle");
+      await page.goto(appUrl, { waitUntil: "networkidle", timeout: 30000 });
+
+      // Wait a bit more for dynamic content
+      await page.waitForTimeout(2000);
 
       // Try to trigger API calls by interacting with the page
       await this.interactWithPage(page);
 
-      await browser.close();
+      // Wait for any pending requests to complete
+      await page.waitForTimeout(3000);
 
       // Remove duplicates
       const uniqueAPIs = this.removeDuplicateAPIs(discoveredAPIs);
@@ -143,6 +176,15 @@ export class ApiTestGenerator {
     } catch (error) {
       console.error("Error discovering APIs:", error);
       return [];
+    } finally {
+      // Ensure browser is always closed
+      if (browser) {
+        try {
+          await browser.close();
+        } catch (closeError) {
+          console.warn("Error closing browser:", closeError);
+        }
+      }
     }
   }
 
@@ -187,64 +229,277 @@ Please provide only valid JSON output.`;
     apiSpec: any,
     options: ApiTestOptions
   ): Promise<ApiTestCase[]> {
-    const prompt = `
-Generate comprehensive API test cases based on the following information:
-
-${
-  apiSpec
-    ? `API Specification:
-${JSON.stringify(apiSpec, null, 2)}`
-    : ""
-}
-
-${
-  options.discoveredAPIs
-    ? `Discovered API Endpoints:
-${JSON.stringify(options.discoveredAPIs, null, 2)}`
-    : ""
-}
-
-${
-  options.userJourney
-    ? `User Journey Context:
-${JSON.stringify(options.userJourney, null, 2)}`
-    : ""
-}
-
-Generate test cases that cover:
-1. Happy path scenarios (valid requests, expected responses)
-2. Error handling (4xx, 5xx status codes)
-3. Edge cases (boundary values, empty payloads)
-4. Authentication and authorization
-5. Data validation
-6. Performance testing
-7. Security testing
-
-For each test case, include:
-- Unique ID and descriptive name
-- HTTP method and endpoint
-- Request headers, body, and query parameters
-- Expected status code and response structure
-- Detailed assertions
-- Priority level and tags
-- Dependencies on other tests if any
-
-Assertion types to use:
-- status: Check HTTP status code
-- header: Validate response headers
-- body: Check response body content
-- schema: Validate response schema
-- performance: Check response time
-
-Please provide a JSON array of test cases:`;
-
     try {
+      console.log("🌐 Generating API test cases with enhanced prompts...");
+      
+      // Create context for prompt generation
+      const context: PromptContext = {
+        apiSpec,
+        discoveredAPIs: options.discoveredAPIs,
+        userJourney: options.userJourney,
+        testType: 'api',
+        complexity: options.complexity || 'intermediate',
+        focus: options.testCategories
+      };
+
+      // Generate enhanced prompt
+      const prompt = PromptTemplates.generateApiTestPrompt(context);
+      
+      console.log(`📝 Using ${context.complexity} complexity level`);
+      console.log(`🎯 Focus areas: ${options.testCategories?.join(', ') || 'all categories'}`);
+      console.log(`🔒 Security tests: ${options.includeSecurityTests ? 'enabled' : 'disabled'}`);
+      console.log(`⚡ Performance tests: ${options.includePerformanceTests ? 'enabled' : 'disabled'}`);
+      
+      // Generate test cases using enhanced prompt
       const testCases = await this.llmProvider.generateJSON(prompt);
-      return Array.isArray(testCases) ? testCases : [];
+      
+      if (!Array.isArray(testCases)) {
+        console.warn("LLM returned non-array response, using fallback");
+        return this.generateFallbackApiTests(options);
+      }
+
+      // Validate and enhance generated test cases
+      const validatedTests = this.validateAndEnhanceApiTestCases(testCases, options);
+      
+      // Add additional specialized tests based on options
+      const specializedTests = this.generateSpecializedTests(options);
+      validatedTests.push(...specializedTests);
+      
+      console.log(`✨ Generated ${validatedTests.length} enhanced API test cases`);
+      return validatedTests;
+      
     } catch (error) {
-      console.error("Failed to generate API test cases:", error);
+      console.error("Failed to generate enhanced API test cases:", error);
       return this.generateFallbackApiTests(options);
     }
+  }
+
+  private validateAndEnhanceApiTestCases(testCases: any[], options: ApiTestOptions): ApiTestCase[] {
+    const validated: ApiTestCase[] = [];
+    const maxTests = options.maxTestCases || 30;
+
+    for (let i = 0; i < testCases.length && validated.length < maxTests; i++) {
+      const testCase = testCases[i];
+      
+      // Validate required fields
+      if (!testCase.id || !testCase.name || !testCase.method || !testCase.endpoint) {
+        console.warn(`Skipping invalid API test case: ${testCase.name || 'unnamed'}`);
+        continue;
+      }
+
+      // Enhance test case with defaults and validation
+      const enhancedTest: ApiTestCase = {
+        id: this.ensureUniqueApiId(testCase.id, validated),
+        name: testCase.name,
+        description: testCase.description || `API test for ${testCase.method} ${testCase.endpoint}`,
+        category: testCase.category || 'functional',
+        priority: this.validateApiPriority(testCase.priority),
+        estimatedDuration: testCase.estimatedDuration || '500ms',
+        tags: Array.isArray(testCase.tags) ? testCase.tags : ['api', 'automated'],
+        prerequisites: testCase.prerequisites || [],
+        dependencies: testCase.dependencies || [],
+        method: testCase.method.toUpperCase(),
+        endpoint: this.normalizeEndpoint(testCase.endpoint),
+        baseUrl: testCase.baseUrl || options.baseUrl,
+        headers: testCase.headers || {},
+        body: testCase.body,
+        queryParams: testCase.queryParams,
+        expectedStatus: testCase.expectedStatus || this.getDefaultStatus(testCase.method),
+        expectedHeaders: testCase.expectedHeaders,
+        expectedResponse: testCase.expectedResponse,
+        assertions: this.validateApiAssertions(testCase.assertions || []),
+        dataSetup: testCase.dataSetup,
+        dataCleanup: testCase.dataCleanup,
+        variableExtraction: testCase.variableExtraction
+      };
+
+      // Add default Content-Type for POST/PUT/PATCH requests
+      if (['POST', 'PUT', 'PATCH'].includes(enhancedTest.method) && enhancedTest.body) {
+        enhancedTest.headers = {
+          'Content-Type': 'application/json',
+          ...enhancedTest.headers
+        };
+      }
+
+      // Add default status assertion if none exists
+      if (!enhancedTest.assertions.some(a => a.type === 'status')) {
+        enhancedTest.assertions.unshift({
+          type: 'status',
+          expected: enhancedTest.expectedStatus,
+          description: `Should return ${enhancedTest.expectedStatus} status`,
+          operator: 'equals'
+        });
+      }
+
+      validated.push(enhancedTest);
+    }
+
+    return this.prioritizeApiTestCases(validated);
+  }
+
+  private generateSpecializedTests(options: ApiTestOptions): ApiTestCase[] {
+    const specializedTests: ApiTestCase[] = [];
+
+    // Generate security tests if enabled
+    if (options.includeSecurityTests && options.discoveredAPIs) {
+      specializedTests.push(...this.generateSecurityTests(options.discoveredAPIs.slice(0, 3)));
+    }
+
+    // Generate performance tests if enabled
+    if (options.includePerformanceTests && options.discoveredAPIs) {
+      specializedTests.push(...this.generatePerformanceTests(options.discoveredAPIs.slice(0, 2)));
+    }
+
+    return specializedTests;
+  }
+
+  private generateSecurityTests(apis: DiscoveredAPI[]): ApiTestCase[] {
+    return apis.map((api, index) => ({
+      id: `api-security-${index}`,
+      name: `Security Test - ${api.method} ${api.url}`,
+      description: `Test security vulnerabilities for ${api.method} ${api.url}`,
+      category: 'security',
+      priority: 'high' as const,
+      estimatedDuration: '1s',
+      tags: ['security', 'automated'],
+      method: api.method,
+      endpoint: api.url,
+      headers: {
+        'X-Malicious-Header': '<script>alert("xss")</script>',
+        ...api.headers
+      },
+      body: api.method === 'POST' ? {
+        maliciousInput: '<script>alert("xss")</script>',
+        sqlInjection: "'; DROP TABLE users; --",
+        ...api.body
+      } : undefined,
+      expectedStatus: api.status < 400 ? api.status : 400,
+      assertions: [
+        {
+          type: 'status',
+          expected: api.status < 400 ? api.status : 400,
+          description: 'Should handle malicious input safely',
+          operator: 'equals'
+        },
+        {
+          type: 'security',
+          expected: 'no_script_execution',
+          description: 'Should not execute malicious scripts',
+          operator: 'exists'
+        }
+      ]
+    }));
+  }
+
+  private generatePerformanceTests(apis: DiscoveredAPI[]): ApiTestCase[] {
+    return apis.map((api, index) => ({
+      id: `api-performance-${index}`,
+      name: `Performance Test - ${api.method} ${api.url}`,
+      description: `Test response time for ${api.method} ${api.url}`,
+      category: 'performance',
+      priority: 'medium' as const,
+      estimatedDuration: '2s',
+      tags: ['performance', 'automated'],
+      method: api.method,
+      endpoint: api.url,
+      headers: api.headers,
+      body: api.body,
+      expectedStatus: api.status,
+      assertions: [
+        {
+          type: 'status',
+          expected: api.status,
+          description: `Should return ${api.status} status`,
+          operator: 'equals'
+        },
+        {
+          type: 'performance',
+          expected: 2000,
+          description: 'Should respond within 2 seconds',
+          operator: 'less'
+        }
+      ]
+    }));
+  }
+
+  private ensureUniqueApiId(id: string, existingTests: ApiTestCase[]): string {
+    let uniqueId = id;
+    let counter = 1;
+    
+    while (existingTests.some(test => test.id === uniqueId)) {
+      uniqueId = `${id}-${counter}`;
+      counter++;
+    }
+    
+    return uniqueId;
+  }
+
+  private validateApiPriority(priority: any): "critical" | "high" | "medium" | "low" {
+    if (['critical', 'high', 'medium', 'low'].includes(priority)) {
+      return priority;
+    }
+    return 'medium';
+  }
+
+  private normalizeEndpoint(endpoint: string): string {
+    // Remove base URL if present and ensure it starts with /
+    const path = endpoint.replace(/^https?:\/\/[^/]+/, '');
+    return path.startsWith('/') ? path : `/${path}`;
+  }
+
+  private getDefaultStatus(method: string): number {
+    switch (method.toUpperCase()) {
+      case 'POST': return 201;
+      case 'DELETE': return 204;
+      case 'PUT':
+      case 'PATCH':
+      case 'GET':
+      default: return 200;
+    }
+  }
+
+  private validateApiAssertions(assertions: any[]): ApiAssertion[] {
+    return assertions.map(assertion => ({
+      type: this.validateApiAssertionType(assertion.type),
+      path: assertion.path || undefined,
+      operator: assertion.operator || 'equals',
+      expected: assertion.expected,
+      description: assertion.description || 'API assertion',
+      timeout: assertion.timeout || 5000
+    }));
+  }
+
+  private validateApiAssertionType(type: any): ApiAssertion['type'] {
+    const validTypes = ['status', 'header', 'body', 'schema', 'performance', 'security'];
+    return validTypes.includes(type) ? type : 'status';
+  }
+
+  private prioritizeApiTestCases(testCases: ApiTestCase[]): ApiTestCase[] {
+    // Sort by priority: critical > high > medium > low
+    const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+    
+    return testCases.sort((a, b) => {
+      const priorityA = priorityOrder[a.priority];
+      const priorityB = priorityOrder[b.priority];
+      
+      if (priorityA !== priorityB) {
+        return priorityA - priorityB;
+      }
+      
+      // Secondary sort by category importance
+      const categoryOrder = { 
+        authentication: 0, 
+        crud: 1, 
+        validation: 2, 
+        security: 3, 
+        performance: 4, 
+        error: 5 
+      };
+      const categoryA = categoryOrder[a.category as keyof typeof categoryOrder] || 6;
+      const categoryB = categoryOrder[b.category as keyof typeof categoryOrder] || 6;
+      
+      return categoryA - categoryB;
+    });
   }
 
   private generateFallbackApiTests(options: ApiTestOptions): ApiTestCase[] {
@@ -258,6 +513,9 @@ Please provide a JSON array of test cases:`;
           id: `api-${index}-happy`,
           name: `${api.method} ${api.url} - Happy Path`,
           description: `Test successful ${api.method} request to ${api.url}`,
+          category: "functional",
+          priority: "high",
+          estimatedDuration: "500ms",
           method: api.method,
           endpoint: api.url,
           headers: api.headers,
@@ -269,15 +527,16 @@ Please provide a JSON array of test cases:`;
               type: "status",
               expected: 200,
               description: "Should return 200 OK",
+              operator: "equals"
             },
             {
               type: "performance",
               expected: 5000,
               description: "Should respond within 5 seconds",
+              operator: "less"
             },
           ],
           tags: ["api", "happy-path"],
-          priority: "high",
         });
 
         // Error handling test
@@ -286,6 +545,9 @@ Please provide a JSON array of test cases:`;
             id: `api-${index}-invalid`,
             name: `${api.method} ${api.url} - Invalid Data`,
             description: `Test ${api.method} request with invalid data`,
+            category: "error",
+            priority: "medium",
+            estimatedDuration: "500ms",
             method: api.method,
             endpoint: api.url,
             headers: api.headers,
@@ -296,10 +558,10 @@ Please provide a JSON array of test cases:`;
                 type: "status",
                 expected: 400,
                 description: "Should return 400 Bad Request for invalid data",
+                operator: "equals"
               },
             ],
             tags: ["api", "error-handling"],
-            priority: "medium",
           });
         }
       });
@@ -313,6 +575,9 @@ Please provide a JSON array of test cases:`;
           name: `${endpoint.method} ${endpoint.path} - Journey Test`,
           description:
             endpoint.description || `Test ${endpoint.method} ${endpoint.path}`,
+          category: "user-journey",
+          priority: "high",
+          estimatedDuration: "1s",
           method: endpoint.method,
           endpoint: endpoint.path,
           expectedStatus: endpoint.statusCode || 200,
@@ -322,10 +587,10 @@ Please provide a JSON array of test cases:`;
               type: "status",
               expected: endpoint.statusCode || 200,
               description: `Should return ${endpoint.statusCode || 200}`,
+              operator: "equals"
             },
           ],
           tags: ["api", "user-journey"],
-          priority: "high",
         });
       });
     }
@@ -350,41 +615,64 @@ Please provide a JSON array of test cases:`;
 
   private async interactWithPage(page: any): Promise<void> {
     try {
+      // Check if page is still valid
+      if (page.isClosed()) {
+        console.warn("Page is closed, skipping interaction");
+        return;
+      }
+
       // Click on buttons and links to trigger API calls
       const buttons = await page.$$('button, input[type="submit"]');
-      for (const button of buttons.slice(0, 3)) {
+      console.log(`Found ${buttons.length} buttons to interact with`);
+
+      for (let i = 0; i < Math.min(buttons.length, 3); i++) {
         try {
-          await button.click();
+          if (page.isClosed()) break;
+
+          const button = buttons[i];
+          await button.click({ timeout: 5000 });
           await page.waitForTimeout(2000); // Wait for potential API calls
         } catch (error) {
+          console.warn(`Button click ${i + 1} failed:`, error.message);
           // Continue if button click fails
         }
       }
 
       // Fill forms to trigger validation/submission APIs
       const forms = await page.$$("form");
-      for (const form of forms.slice(0, 2)) {
+      console.log(`Found ${forms.length} forms to interact with`);
+
+      for (let i = 0; i < Math.min(forms.length, 2); i++) {
         try {
+          if (page.isClosed()) break;
+
+          const form = forms[i];
           const inputs = await form.$$(
             'input[type="text"], input[type="email"]'
           );
+
           for (const input of inputs) {
-            await input.fill("test");
+            try {
+              await input.fill("test", { timeout: 3000 });
+            } catch (inputError) {
+              console.warn("Input fill failed:", inputError.message);
+            }
           }
 
           const submitBtn = await form.$(
             'input[type="submit"], button[type="submit"]'
           );
           if (submitBtn) {
-            await submitBtn.click();
+            await submitBtn.click({ timeout: 5000 });
             await page.waitForTimeout(3000);
           }
         } catch (error) {
+          console.warn(`Form interaction ${i + 1} failed:`, error.message);
           // Continue if form interaction fails
         }
       }
     } catch (error) {
-      console.warn("Error during page interaction:", error);
+      console.warn("Error during page interaction:", error.message);
     }
   }
 

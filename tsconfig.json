@@ -50,13 +50,14 @@
     "typeRoots": ["./node_modules/@types", "./src/types"],
     "types": ["node"]
   },
-  "include": ["src/**/*", "examples/**/*"],
+  "include": ["src/**/*"],
   "exclude": [
     "node_modules",
     "dist",
     "build",
     "tests",
     "reports",
+    "examples",
     "**/*.test.ts",
     "**/*.spec.ts"
   ],

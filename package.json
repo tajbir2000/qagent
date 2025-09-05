@@ -12,17 +12,28 @@
     "test:gui": "ts-node src/main.ts run --type=gui",
     "test:api": "ts-node src/main.ts run --type=api",
     "generate:from-journey": "ts-node src/main.ts generate --journey=examples/user-journey.json",
-    "generate:from-url": "ts-node src/main.ts generate --url=https://example.com",
-    "full:ecommerce": "ts-node src/main.ts full --journey=examples/user-journey.json --api=examples/api-spec.json"
+    "generate:from-url": "ts-node src/main.ts generate --url=https://bdtickets.com/",
+    "full:ecommerce": "ts-node src/main.ts full --journey=examples/user-journey.json --api=examples/api-spec.json",
+    "generate:enhanced": "ts-node src/main.ts generate --complexity=advanced --edge-cases --security --performance",
+    "generate:basic": "ts-node src/main.ts generate --complexity=basic --max-tests=10",
+    "generate:security": "ts-node src/main.ts generate --complexity=intermediate --security --edge-cases",
+    "generate:performance": "ts-node src/main.ts generate --complexity=intermediate --performance --categories=performance,api",
+    "ollama:start": "ollama serve",
+    "ollama:pull-codellama": "ollama pull codellama:7b",
+    "ollama:pull-llama3": "ollama pull llama3.1:8b",
+    "test:local-llm": "cross-env USE_LOCAL_LLM=true ts-node src/main.ts generate --journey=examples/user-journey.json",
+    "test:enhanced-local": "cross-env USE_LOCAL_LLM=true ts-node src/main.ts generate --complexity=advanced --edge-cases --security"
   },
   "dependencies": {
     "openai": "^4.0.0",
     "playwright": "^1.42.0",
-    "dotenv": "^16.3.1"
+    "dotenv": "^16.3.1",
+    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
     "ts-node": "^10.9.1",
     "typescript": "^5.2.2",
-    "@types/node": "^20.0.0"
+    "@types/node": "^20.0.0",
+    "cross-env": "^7.0.3"
   }
 }
